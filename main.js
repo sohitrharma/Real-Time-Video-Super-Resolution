@@ -1,7 +1,6 @@
+import * as tf from '@tensorflow/tfjs';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap/dist/js/bootstrap.min.js';
-import './style.css';
-
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-app.js';
 import {
   addDoc,
@@ -13,6 +12,7 @@ import {
   setDoc,
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
+import './style.css';
 
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
@@ -56,6 +56,12 @@ const callInput = document.getElementById('callInput');
 const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
+let superResolutionModel = null;
+
+async function loadSuperResolutionModel() {
+  superResolutionModel = await tf.loadGraphModel('https://firebasestorage.googleapis.com/v0/b/webrtc-video-conferencin-a2abe.appspot.com/o/model.json?alt=media&token=934547c1-af29-4dfc-8dad-a4b5cee34464');
+}
+loadSuperResolutionModel();
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -76,10 +82,44 @@ webcamButton.addEventListener('click', async () => {
     pc.addTrack(track, localStream);
   });
   pc.ontrack = (event) => {
-    event.streams[0].getTracks().forEach((track) => {
-      remoteStream.addTrack(track);
+    const incomingStream = event.streams[0];
+
+    incomingStream.getTracks().forEach((track) => {
+      if (track.kind === 'video' && superResolutionModel) {
+        // Create an offscreen video element to play the original track
+        const originalVideo = document.createElement('video');
+        originalVideo.autoplay = true;
+        originalVideo.playsInline = true;
+        originalVideo.srcObject = new MediaStream([track]);
+
+        originalVideo.onloadedmetadata = async () => {
+          // Make sure the video is played after metadata is loaded
+          await originalVideo.play();
+
+          const tensor = tf.browser.fromPixels(originalVideo).toFloat().div(tf.scalar(255));
+
+          // Adjust to channels-first ordering
+          const reordered = tensor.transpose([2, 0, 1]);
+
+          const batched = reordered.reshape([1, 3, originalVideo.videoHeight, originalVideo.videoWidth]);
+
+          const output = superResolutionModel.predict({ input: batched }); // ensure input name matches model's expected input tensor name
+
+          const outputVideo = document.createElement('video');
+          outputVideo.autoplay = true;
+          outputVideo.playsInline = true;
+          outputVideo.srcObject = new MediaStream([tf.browser.toPixels(output.squeeze()).captureStream().getVideoTracks()[0]]);
+
+          remoteStream.addTrack(outputVideo.captureStream().getVideoTracks()[0]);
+        };
+
+      } else {
+        remoteStream.addTrack(track);
+      }
     });
   };
+
+
   webcamVideo.srcObject = localStream;
   remoteVideo.srcObject = remoteStream;
 
@@ -88,6 +128,7 @@ webcamButton.addEventListener('click', async () => {
   answerButton.disabled = false;
   webcamButton.disabled = true;
 });
+
 
 callButton.addEventListener('click', async () => {
   const callDoc = doc(callsCollection);
