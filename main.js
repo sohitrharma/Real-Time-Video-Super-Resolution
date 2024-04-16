@@ -13,12 +13,9 @@ import {
   setDoc,
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
-
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
+import { InferenceSession, Tensor } from 'onnxjs';
+import cv from 'opencv.js';
 // Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyD_F2QU9kOyUxt83o7ntZiWNVkyFdJDjbM",
   authDomain: "webrtc-video-conferencin-a2abe.firebaseapp.com",
@@ -29,25 +26,30 @@ const firebaseConfig = {
   measurementId: "G-F55B7DMZK6"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const firestore = getFirestore(app);
 const callsCollection = collection(firestore, 'calls');
 
 const servers = {
   iceServers: [
-    {
-      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
-    },
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
   ],
   iceCandidatePoolSize: 10,
   sctp: true,
 };
 
-// Global State
 let pc = new RTCPeerConnection(servers);
 let localStream = null;
 let remoteStream = null;
+
+let superResolutionSession;
+
+async function loadSuperResolutionModel() {
+  superResolutionSession = new InferenceSession();
+  await superResolutionSession.loadModel('./super-resolution-10.onnx');
+}
+
+loadSuperResolutionModel();
 
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
@@ -56,6 +58,69 @@ const callInput = document.getElementById('callInput');
 const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
+
+// Ensure OpenCV is ready
+if (!window.isCvLoaded) {
+  console.error("OpenCV not loaded");
+}
+
+// const cv = window.cv;
+
+async function enhanceVideoFrame() {
+  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight || !cv) {
+      console.error("Video stream not ready or OpenCV not loaded");
+      return;
+  }
+
+  console.log("Enhancing Video Frame...");
+
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = remoteVideo.videoWidth;
+  canvas.height = remoteVideo.videoHeight;
+
+  context.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+  let src = cv.imread(canvas);
+  let ycrcb = new cv.Mat();
+  cv.cvtColor(src, ycrcb, cv.COLOR_RGBA2YCrCb);
+
+  let channels = new cv.MatVector();
+  cv.split(ycrcb, channels);
+  let Y = channels.get(0);
+
+  try {
+      const inputTensor = new Tensor(new Float32Array(Y.data), 'float32', [1, 1, Y.rows, Y.cols]);
+      console.log("Tensor prepared for model input");
+      const outputs = await superResolutionSession.run({ input: inputTensor });
+      const outputTensor = outputs.values().next().value;
+      console.log("Model output received");
+
+      let upscaledY = cv.matFromArray(Y.rows, Y.cols, cv.CV_8UC1, outputTensor.data);
+      let upscaledCrCb = new cv.Mat();
+      cv.resize(channels.get(1), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
+      cv.resize(channels.get(2), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
+
+      let merged = new cv.Mat();
+      let newChannels = new cv.MatVector();
+      newChannels.push_back(upscaledY);
+      newChannels.push_back(upscaledCrCb);
+      newChannels.push_back(upscaledCrCb);
+      cv.merge(newChannels, merged);
+
+      cv.cvtColor(merged, src, cv.COLOR_YCrCb2RGBA);
+      cv.imshow(canvas, src);
+
+      remoteVideo.srcObject = canvas.captureStream();
+
+      // Clean up
+      src.delete(); ycrcb.delete(); Y.delete(); upscaledY.delete(); upscaledCrCb.delete(); merged.delete(); newChannels.delete();
+  } catch (error) {
+      console.error("Error during enhancement: ", error);
+  }
+}
+
+setInterval(enhanceVideoFrame, 1000 / 30);
+
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -83,12 +148,10 @@ webcamButton.addEventListener('click', async () => {
   webcamVideo.srcObject = localStream;
   remoteVideo.srcObject = remoteStream;
 
-  // Enable/disable respective buttons
   callButton.disabled = false;
   answerButton.disabled = false;
   webcamButton.disabled = true;
 });
-
 callButton.addEventListener('click', async () => {
   const callDoc = doc(callsCollection);
   const offerCandidates = collection(callDoc, 'offerCandidates');
@@ -96,26 +159,31 @@ callButton.addEventListener('click', async () => {
 
   callInput.value = callDoc.id;
 
-  pc.onicecandidate = async (event) => {
-    event.candidate && await addDoc(offerCandidates, event.candidate.toJSON());
+  pc.onicecandidate = event => {
+    if (event.candidate) {
+      addDoc(offerCandidates, event.candidate.toJSON());
+    }
   };
 
   const offerDescription = await pc.createOffer();
   await pc.setLocalDescription(offerDescription);
+
   const offer = {
     sdp: offerDescription.sdp,
     type: offerDescription.type,
   };
   await setDoc(callDoc, { offer });
-  onSnapshot(doc(firestore, 'calls', callDoc.id), (snapshot) => {
+
+  onSnapshot(doc(firestore, 'calls', callDoc.id), snapshot => {
     const data = snapshot.data();
     if (!pc.currentRemoteDescription && data?.answer) {
       const answerDescription = new RTCSessionDescription(data.answer);
       pc.setRemoteDescription(answerDescription);
     }
   });
-  onSnapshot(collection(doc(firestore, 'calls', callDoc.id), 'answerCandidates'), (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
+
+  onSnapshot(collection(doc(firestore, 'calls', callDoc.id), 'answerCandidates'), snapshot => {
+    snapshot.docChanges().forEach(change => {
       if (change.type === 'added') {
         const candidate = new RTCIceCandidate(change.doc.data());
         pc.addIceCandidate(candidate);
@@ -132,23 +200,29 @@ answerButton.addEventListener('click', async () => {
   const answerCandidates = collection(callDoc, 'answerCandidates');
   const offerCandidates = collection(callDoc, 'offerCandidates');
 
-  pc.onicecandidate = async (event) => {
-    event.candidate && await addDoc(answerCandidates, event.candidate.toJSON());
+  pc.onicecandidate = event => {
+    if (event.candidate) {
+      addDoc(answerCandidates, event.candidate.toJSON());
+    }
   };
+
   const callData = (await getDoc(callDoc)).data();
   const offerDescription = callData.offer;
   await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
+
   const answerDescription = await pc.createAnswer();
   await pc.setLocalDescription(answerDescription);
+
   const answer = {
     type: answerDescription.type,
     sdp: answerDescription.sdp,
   };
   await updateDoc(callDoc, { answer });
-  onSnapshot(collection(callDoc, 'offerCandidates'), (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
+
+  onSnapshot(collection(callDoc, 'offerCandidates'), snapshot => {
+    snapshot.docChanges().forEach(change => {
       if (change.type === 'added') {
-        let data = change.doc.data();
+        const data = change.doc.data();
         pc.addIceCandidate(new RTCIceCandidate(data));
       }
     });
@@ -163,24 +237,21 @@ async function hangupCall() {
   const callDoc = doc(callsCollection, callId);
   await updateDoc(callDoc, { callEnded: true });
 
-  // Reset the UI state
   hangupButton.disabled = true;
   callButton.disabled = false;
   answerButton.disabled = false;
   webcamButton.disabled = false;
   callInput.value = '';
 
-  // Gracefully reset the peer connection
   pc = new RTCPeerConnection(servers);
 }
 
 hangupButton.addEventListener('click', hangupCall);
 
-// Listen for Call Termination on both sides (caller and recipient)
 function monitorCallEnd() {
   const callId = callInput.value;
   const callDoc = doc(callsCollection, callId);
-  onSnapshot(callDoc, (snapshot) => {
+  onSnapshot(callDoc, snapshot => {
     const data = snapshot.data();
     if (data?.callEnded) {
       hangupCall();
@@ -188,6 +259,5 @@ function monitorCallEnd() {
   });
 }
 
-// Add call monitoring immediately after setting up the call or answering
 callButton.addEventListener('click', monitorCallEnd);
 answerButton.addEventListener('click', monitorCallEnd);
