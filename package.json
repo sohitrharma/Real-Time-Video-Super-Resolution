@@ -15,6 +15,7 @@
     "onnxjs": "^0.1.8",
     "onnxruntime-web": "^1.17.3",
     "opencv.js": "^1.2.1",
+    "opencv4js": "^3.4.3",
     "opencvjs": "^1.0.1"
   }
 }
