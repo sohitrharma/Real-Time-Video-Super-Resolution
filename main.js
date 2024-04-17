@@ -14,7 +14,7 @@ import {
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
 import { InferenceSession, Tensor } from 'onnxjs';
-import cv from 'opencv.js';
+
 // Your web app's Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyD_F2QU9kOyUxt83o7ntZiWNVkyFdJDjbM",
@@ -59,20 +59,33 @@ const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
 
-// Ensure OpenCV is ready
-if (!window.isCvLoaded) {
-  console.error("OpenCV not loaded");
+function ensureOpenCvLoaded() {
+  return new Promise((resolve, reject) => {
+    const checkOpenCv = () => {
+      if (window.cv && window.cv.imread) {
+        console.log('OpenCV is ready.');
+        resolve();
+      } else {
+        console.log('Waiting for OpenCV...');
+        setTimeout(checkOpenCv, 100);
+      }
+    };
+    checkOpenCv();
+  });
 }
-
-// const cv = window.cv;
+await ensureOpenCvLoaded();
 
 async function enhanceVideoFrame() {
-  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight || !cv) {
-      console.error("Video stream not ready or OpenCV not loaded");
-      return;
+  const remoteVideo = document.getElementById('remoteVideo');
+  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
+    console.error("Video dimensions not ready");
+    return;
   }
 
-  console.log("Enhancing Video Frame...");
+  if (remoteVideo.readyState < 2) {
+    console.error("Video is not ready for playing");
+    return;
+  }
 
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
@@ -80,44 +93,76 @@ async function enhanceVideoFrame() {
   canvas.height = remoteVideo.videoHeight;
 
   context.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+
   let src = cv.imread(canvas);
   let ycrcb = new cv.Mat();
-  cv.cvtColor(src, ycrcb, cv.COLOR_RGBA2YCrCb);
+  try {
+    cv.cvtColor(src, ycrcb, cv.COLOR_RGB2YCrCb);
+  } catch (error) {
+    console.error("Error converting color:", error);
+    src.delete(); // Always clean up
+    return;
+  }
 
   let channels = new cv.MatVector();
   cv.split(ycrcb, channels);
   let Y = channels.get(0);
 
+  if (!Y || Y.empty()) {
+    console.error("Y channel is undefined or empty");
+    src.delete();
+    ycrcb.delete();
+    channels.delete();
+    return;
+  }
+  if (Y.type() !== cv.CV_32F) {
+    let Y_float = new cv.Mat();
+    Y.convertTo(Y_float, cv.CV_32F);
+    Y.delete();  // Delete the old Y
+    Y = Y_float; // Use the new converted Mat
+  }
   try {
-      const inputTensor = new Tensor(new Float32Array(Y.data), 'float32', [1, 1, Y.rows, Y.cols]);
-      console.log("Tensor prepared for model input");
-      const outputs = await superResolutionSession.run({ input: inputTensor });
-      const outputTensor = outputs.values().next().value;
-      console.log("Model output received");
+    let numElements = Y.rows * Y.cols;
+    let Y_array = new Float32Array(Y.data32F);
+    const inputTensor = new Tensor(Y_array, 'float32', [1, 1, Y.rows, Y.cols]);
+    const outputs = await superResolutionSession.run({ input: inputTensor });
+    const outputTensor = outputs.values().next().value;
 
-      let upscaledY = cv.matFromArray(Y.rows, Y.cols, cv.CV_8UC1, outputTensor.data);
-      let upscaledCrCb = new cv.Mat();
-      cv.resize(channels.get(1), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
-      cv.resize(channels.get(2), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
+    if (!outputTensor || !outputTensor.data) {
+      console.error("outputTensor or outputTensor.data is undefined");
+      throw new Error("Invalid output tensor data");
+    }
 
-      let merged = new cv.Mat();
-      let newChannels = new cv.MatVector();
-      newChannels.push_back(upscaledY);
-      newChannels.push_back(upscaledCrCb);
-      newChannels.push_back(upscaledCrCb);
-      cv.merge(newChannels, merged);
+    let upscaledY = cv.matFromArray(Y.rows, Y.cols, cv.CV_8UC1, outputTensor.data);
+    let upscaledCrCb = new cv.Mat();
+    cv.resize(channels.get(1), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
+    cv.resize(channels.get(2), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
 
-      cv.cvtColor(merged, src, cv.COLOR_YCrCb2RGBA);
-      cv.imshow(canvas, src);
+    let merged = new cv.Mat();
+    let newChannels = new cv.MatVector();
+    newChannels.push_back(upscaledY);
+    newChannels.push_back(upscaledCrCb);
+    newChannels.push_back(upscaledCrCb);
+    cv.merge(newChannels, merged);
 
-      remoteVideo.srcObject = canvas.captureStream();
+    cv.cvtColor(merged, src, cv.COLOR_YCrCb2RGB);
+    cv.imshow(canvas, src);
 
-      // Clean up
-      src.delete(); ycrcb.delete(); Y.delete(); upscaledY.delete(); upscaledCrCb.delete(); merged.delete(); newChannels.delete();
+    remoteVideo.srcObject = canvas.captureStream();
+
+    src.delete(); ycrcb.delete(); Y.delete(); upscaledY.delete(); upscaledCrCb.delete(); merged.delete(); newChannels.delete();
   } catch (error) {
-      console.error("Error during enhancement: ", error);
+    console.error("Error during enhancement: ", error);
+    src.delete();
+    ycrcb.delete();
+    if (Y) Y.delete();
   }
 }
+
+
+
+
+
 
 setInterval(enhanceVideoFrame, 1000 / 30);
 
