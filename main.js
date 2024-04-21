@@ -42,11 +42,12 @@ let pc = new RTCPeerConnection(servers);
 let localStream = null;
 let remoteStream = null;
 
-let superResolutionSession;
+let model;
 
 async function loadSuperResolutionModel() {
-  superResolutionSession = new InferenceSession();
-  await superResolutionSession.loadModel('./super-resolution-10.onnx');
+  console.log('Loading the model...');
+  model = await tf.loadGraphModel('model/model.json');
+  console.log('Model loaded successfully.');
 }
 
 loadSuperResolutionModel();
@@ -59,112 +60,92 @@ const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
 
-function ensureOpenCvLoaded() {
-  return new Promise((resolve, reject) => {
-    const checkOpenCv = () => {
-      if (window.cv && window.cv.imread) {
-        console.log('OpenCV is ready.');
-        resolve();
-      } else {
-        console.log('Waiting for OpenCV...');
-        setTimeout(checkOpenCv, 100);
-      }
-    };
-    checkOpenCv();
-  });
-}
-await ensureOpenCvLoaded();
-
 async function enhanceVideoFrame() {
-  const remoteVideo = document.getElementById('remoteVideo');
-  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
-    console.error("Video dimensions not ready");
+  if (!model || !remoteVideo || remoteVideo.readyState < 2) {
+    console.log('Model not loaded or video not ready');
     return;
   }
 
-  if (remoteVideo.readyState < 2) {
-    console.error("Video is not ready for playing");
+  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
+    console.log('Video dimensions not ready');
     return;
   }
+
+  console.log('Starting video frame enhancement');
+  tf.engine().startScope();
 
   const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
   canvas.width = remoteVideo.videoWidth;
   canvas.height = remoteVideo.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
 
-  context.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+  const tensor = tf.browser.fromPixels(canvas).toFloat().div(tf.scalar(255.0));
+  console.log('Initial tensor shape:', tensor.shape);
 
-  let src = cv.imread(canvas);
-  let ycrcb = new cv.Mat();
-  try {
-    cv.cvtColor(src, ycrcb, cv.COLOR_RGB2YCrCb);
-  } catch (error) {
-    console.error("Error converting color:", error);
-    src.delete(); // Always clean up
-    return;
-  }
+  let [R, G, B] = tf.split(tensor, 3, 2);
+  let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
+  let Cr = R.sub(Y).mul(0.713).add(0.5);
+  let Cb = B.sub(Y).mul(0.564).add(0.5);
+  console.log('Y channel shape:', Y.shape);
+  console.log('Cr channel shape:', Cr.shape);
+  console.log('Cb channel shape:', Cb.shape);
 
-  let channels = new cv.MatVector();
-  cv.split(ycrcb, channels);
-  let Y = channels.get(0);
+  Y = Y.expandDims(0);
+  Y = tf.image.resizeBilinear(Y, [240, 480]);
+  Y = Y.transpose([0, 3, 1, 2]);
+  console.log('Y channel shape after resize and transpose:', Y.shape);
 
-  if (!Y || Y.empty()) {
-    console.error("Y channel is undefined or empty");
-    src.delete();
-    ycrcb.delete();
-    channels.delete();
-    return;
-  }
-  if (Y.type() !== cv.CV_32F) {
-    let Y_float = new cv.Mat();
-    Y.convertTo(Y_float, cv.CV_32F);
-    Y.delete();  // Delete the old Y
-    Y = Y_float; // Use the new converted Mat
-  }
-  try {
-    let numElements = Y.rows * Y.cols;
-    let Y_array = new Float32Array(Y.data32F);
-    const inputTensor = new Tensor(Y_array, 'float32', [1, 1, Y.rows, Y.cols]);
-    const outputs = await superResolutionSession.run({ input: inputTensor });
-    const outputTensor = outputs.values().next().value;
+  const outputTensor = await model.predict(Y);
+  console.log('Output tensor shape:', outputTensor.shape);
 
-    if (!outputTensor || !outputTensor.data) {
-      console.error("outputTensor or outputTensor.data is undefined");
-      throw new Error("Invalid output tensor data");
-    }
+  Cr = Cr.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
+  Cb = Cb.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
+  console.log('Upscaled Cr shape:', Cr.shape);
+  console.log('Upscaled Cb shape:', Cb.shape);
 
-    let upscaledY = cv.matFromArray(Y.rows, Y.cols, cv.CV_8UC1, outputTensor.data);
-    let upscaledCrCb = new cv.Mat();
-    cv.resize(channels.get(1), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
-    cv.resize(channels.get(2), upscaledCrCb, new cv.Size(upscaledY.cols, upscaledY.rows), 0, 0, cv.INTER_CUBIC);
+  let YCrCbUpscaled = tf.concat([outputTensor, Cr, Cb], 1);
+  console.log('Merged YCrCb tensor shape:', YCrCbUpscaled.shape);
 
-    let merged = new cv.Mat();
-    let newChannels = new cv.MatVector();
-    newChannels.push_back(upscaledY);
-    newChannels.push_back(upscaledCrCb);
-    newChannels.push_back(upscaledCrCb);
-    cv.merge(newChannels, merged);
+  const RGBUpscaled = tf.tidy(() => {
+    const Y = YCrCbUpscaled.slice([0, 0, 0, 0], [-1, 1, -1, -1]).squeeze();
+    const Cr = YCrCbUpscaled.slice([0, 1, 0, 0], [-1, 1, -1, -1]).squeeze();
+    const Cb = YCrCbUpscaled.slice([0, 2, 0, 0], [-1, 1, -1, -1]).squeeze();
 
-    cv.cvtColor(merged, src, cv.COLOR_YCrCb2RGB);
-    cv.imshow(canvas, src);
+    const R = Y.add(Cr.sub(0.5).mul(1.403));
+    const G = Y.sub(Cr.sub(0.5).mul(0.344)).sub(Cb.sub(0.5).mul(0.714));
+    const B = Y.add(Cb.sub(0.5).mul(1.773));
+    return tf.stack([R, G, B], 2).clipByValue(0, 1);
+  });
+  console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
 
-    remoteVideo.srcObject = canvas.captureStream();
+  await tf.browser.toPixels(RGBUpscaled, canvas);
+  console.log('Rendered to canvas');
 
-    src.delete(); ycrcb.delete(); Y.delete(); upscaledY.delete(); upscaledCrCb.delete(); merged.delete(); newChannels.delete();
-  } catch (error) {
-    console.error("Error during enhancement: ", error);
-    src.delete();
-    ycrcb.delete();
-    if (Y) Y.delete();
-  }
+  const enhancedStream = canvas.captureStream();
+  const [videoTrack] = enhancedStream.getVideoTracks();
+  remoteVideo.srcObject = new MediaStream([videoTrack]);
+
+  tensor.dispose();
+  R.dispose();
+  G.dispose();
+  B.dispose();
+  Y.dispose();
+  Cr.dispose();
+  Cb.dispose();
+  outputTensor.dispose();
+  YCrCbUpscaled.dispose();
+  RGBUpscaled.dispose();
+  tf.engine().endScope();
+  console.log('Enhancement complete and tensors disposed');
 }
 
 
+setInterval(enhanceVideoFrame, 1000); // Running at 10 FPS for performance reasons
 
 
 
 
-setInterval(enhanceVideoFrame, 1000 / 30);
 
 
 webcamButton.addEventListener('click', async () => {
