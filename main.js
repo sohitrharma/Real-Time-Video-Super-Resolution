@@ -52,6 +52,23 @@ async function loadSuperResolutionModel() {
 
 loadSuperResolutionModel();
 
+async function loadONNXModel() {
+  try {
+    // Create an ONNX session. 'webgl' backend is used by default if available.
+    const session = new onnx.InferenceSession();
+
+    // Load the ONNX model. Adjust the path to where your model is hosted.
+    await session.loadModel('model/my_modela.onnx');
+
+    console.log('ONNX model loaded successfully');
+    // You can now use the 'session' to run inference.
+  } catch (error) {
+    console.error('Failed to load the ONNX model:', error);
+  }
+}
+
+loadONNXModel();
+
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
 const callButton = document.getElementById('callButton');
@@ -87,25 +104,25 @@ async function enhanceVideoFrame() {
   let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
   let Cr = R.sub(Y).mul(0.713).add(0.5);
   let Cb = B.sub(Y).mul(0.564).add(0.5);
-  console.log('Y channel shape:', Y.shape);
-  console.log('Cr channel shape:', Cr.shape);
-  console.log('Cb channel shape:', Cb.shape);
+  // console.log('Y channel shape:', Y.shape);
+  // console.log('Cr channel shape:', Cr.shape);
+  // console.log('Cb channel shape:', Cb.shape);
 
   Y = Y.expandDims(0);
   Y = tf.image.resizeBilinear(Y, [240, 480]);
   Y = Y.transpose([0, 3, 1, 2]);
-  console.log('Y channel shape after resize and transpose:', Y.shape);
+  // console.log('Y channel shape after resize and transpose:', Y.shape);
 
   const outputTensor = await model.predict(Y);
-  console.log('Output tensor shape:', outputTensor.shape);
+  // console.log('Output tensor shape:', outputTensor.shape);
 
   Cr = Cr.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
   Cb = Cb.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
-  console.log('Upscaled Cr shape:', Cr.shape);
-  console.log('Upscaled Cb shape:', Cb.shape);
+  // console.log('Upscaled Cr shape:', Cr.shape);
+  // console.log('Upscaled Cb shape:', Cb.shape);
 
   let YCrCbUpscaled = tf.concat([outputTensor, Cr, Cb], 1);
-  console.log('Merged YCrCb tensor shape:', YCrCbUpscaled.shape);
+  // console.log('Merged YCrCb tensor shape:', YCrCbUpscaled.shape);
 
   const RGBUpscaled = tf.tidy(() => {
     const Y = YCrCbUpscaled.slice([0, 0, 0, 0], [-1, 1, -1, -1]).squeeze();
@@ -117,10 +134,10 @@ async function enhanceVideoFrame() {
     const B = Y.add(Cb.sub(0.5).mul(1.773));
     return tf.stack([R, G, B], 2).clipByValue(0, 1);
   });
-  console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
+  // console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
 
   await tf.browser.toPixels(RGBUpscaled, canvas);
-  console.log('Rendered to canvas');
+  // console.log('Rendered to canvas');
 
   const enhancedStream = canvas.captureStream();
   const [videoTrack] = enhancedStream.getVideoTracks();
@@ -137,7 +154,7 @@ async function enhanceVideoFrame() {
   YCrCbUpscaled.dispose();
   RGBUpscaled.dispose();
   tf.engine().endScope();
-  console.log('Enhancement complete and tensors disposed');
+  // console.log('Enhancement complete and tensors disposed');
 }
 
 
@@ -287,3 +304,94 @@ function monitorCallEnd() {
 
 callButton.addEventListener('click', monitorCallEnd);
 answerButton.addEventListener('click', monitorCallEnd);
+let dataPoints = []; // This will store your RTT and bandwidth
+
+function addDataPoint(activeCandidatePair) {
+  if (activeCandidatePair) {
+    const rtt = Math.floor(activeCandidatePair.currentRoundTripTime * 1000) + ' ms';
+    console.log('RTT ', rtt);
+
+    dataPoints.push({
+      rtt: activeCandidatePair.currentRoundTripTime,
+      bandwidth: rtt, // Adjust based on your actual bandwidth calculation
+      bytesSent: activeCandidatePair.bytesSent,
+      bytesReceived: activeCandidatePair.bytesReceived
+    });
+
+    console.log('dataPoints ', dataPoints);
+  }
+
+}
+
+
+// Monitor real-time bandwidth
+pc.onconnectionstatechange = event => {
+  if (pc.connectionState === 'connected') {
+    setInterval(async () => {
+      const stats = await pc.getStats();
+      let activeCandidatePair;
+      stats.forEach(report => {
+        if (report.type === 'transport') {
+          activeCandidatePair = stats.get(report.selectedCandidatePairId);
+        }
+      });
+
+      if (activeCandidatePair) {
+        // Calcula te RTT in milliseconds
+        const rtt = Math.floor(activeCandidatePair.currentRoundTripTime * 1000) + ' ms';
+        // console.log('RTT ', rtt);
+
+        // Extract bytesSent and bytesReceived from the activeCandidatePair
+        const bytesSent = activeCandidatePair.bytesSent;
+        const bytesReceived = activeCandidatePair.bytesReceived;
+
+        // Add the RTT, bytesSent, and bytesReceived to the dataPoints array
+        dataPoints.push({
+          rtt: activeCandidatePair.currentRoundTripTime,
+          bandwidth: rtt, // Assuming you want to keep using RTT for 'bandwidth'
+          bytesSent: bytesSent,
+          bytesReceived: bytesReceived
+        });
+
+
+        console.log('dataPoints $$ ', dataPoints);
+
+
+      }
+    }, 1000);
+  }
+};
+
+function logBandwidthData(pc) {
+
+  // This function retrieves stats and logs bandwidth data
+  setInterval(async () => {
+    const stats = await pc.getStats();
+    let activeCandidatePair;
+
+
+    stats.forEach(report => {
+      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+        activeCandidatePair = report;
+        console.log("hii")
+      }
+    });
+
+    if (activeCandidatePair && activeCandidatePair.currentRoundTripTime) {
+      const rtt = (activeCandidatePair.currentRoundTripTime * 1000).toFixed(2) + ' ms';
+      const bytesSentSinceLastInterval = activeCandidatePair.bytesSent;
+      const bytesReceivedSinceLastInterval = activeCandidatePair.bytesReceived;
+
+      console.log('Current RTT:', rtt);
+      console.log('Bytes Sent Since Last Interval:', bytesSentSinceLastInterval);
+      console.log('Bytes Received Since Last Interval:', bytesReceivedSinceLastInterval);
+
+      // Store or process your bandwidth data here as needed
+    }
+  }, 1000); // Poll every second
+}
+
+// Call this function after establishing the peer connection
+logBandwidthData(pc);
+
+
