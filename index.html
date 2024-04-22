@@ -11,26 +11,28 @@
 
 <body>
 
-  <div class="container">
-    <h2>Video Conferencing</h2>
+  <h1>Video Conferencing</h1>
 
-    <p>Please provide permission when prompted to access your camera and microphone. This will ensure the best video
-      conferencing experience.</p>
+  <p>Please provide permission when prompted to access your camera and microphone. This will ensure the best video
+    conferencing experience.</p>
+
+
+  <div class="controls">
+    <button class="btn btn-primary" id="webcamButton">Start Webcam</button>
+    <button class="btn btn-primary" id="callButton" disabled>Create Call</button>
+
+    <label for="callInput">Enter Call ID to join an existing call or create a new call to get an ID:</label>
+    <input type="text" id="callInput" placeholder="Enter Call ID">
+
+    <button class="btn btn-primary" id="answerButton" disabled>Answer</button>
+    <button class="btn btn-primary" id="hangupButton" disabled>Hangup</button>
+  </div>
+
+  <div class="container">
 
     <div class="video-section">
       <video id="webcamVideo" muted autoplay playsinline></video>
       <video id="remoteVideo" autoplay playsinline></video>
-    </div>
-
-    <div class="controls">
-      <button class="btn btn-primary" id="webcamButton">Start Webcam</button>
-      <button class="btn btn-primary" id="callButton" disabled>Create Call</button>
-
-      <label for="callInput">Enter Call ID to join an existing call or create a new call to get an ID:</label>
-      <input type="text" id="callInput" placeholder="Enter Call ID">
-
-      <button class="btn btn-primary" id="answerButton" disabled>Answer</button>
-      <button class="btn btn-primary" id="hangupButton" disabled>Hangup</button>
     </div>
 
     <div id="errorMsg" class="error-message"></div> <!-- For displaying potential error messages -->
