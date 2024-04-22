@@ -43,31 +43,28 @@ let localStream = null;
 let remoteStream = null;
 
 let model;
+let modela;
 
 async function loadSuperResolutionModel() {
-  console.log('Loading the model...');
+  // console.log('Loading the model...');
   model = await tf.loadGraphModel('model/model.json');
-  console.log('Model loaded successfully.');
+  // console.log('Model loaded successfully.');
 }
 
 loadSuperResolutionModel();
 
-async function loadONNXModel() {
-  try {
-    // Create an ONNX session. 'webgl' backend is used by default if available.
-    const session = new onnx.InferenceSession();
+// let modelb;  // Declare the model variable globally
 
-    // Load the ONNX model. Adjust the path to where your model is hosted.
-    await session.loadModel('model/my_modela.onnx');
+// async function loadModel() {
+//     try {
+//         modelb = await tf.loadGraphModel('model/modela.json');
+//         console.log('Model loaded successfully.');
+//     } catch (error) {
+//         console.error('Failed to load the model:', error);
+//     }
+// }
 
-    console.log('ONNX model loaded successfully');
-    // You can now use the 'session' to run inference.
-  } catch (error) {
-    console.error('Failed to load the ONNX model:', error);
-  }
-}
-
-loadONNXModel();
+// loadModel();
 
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
@@ -306,92 +303,88 @@ callButton.addEventListener('click', monitorCallEnd);
 answerButton.addEventListener('click', monitorCallEnd);
 let dataPoints = []; // This will store your RTT and bandwidth
 
-function addDataPoint(activeCandidatePair) {
-  if (activeCandidatePair) {
-    const rtt = Math.floor(activeCandidatePair.currentRoundTripTime * 1000) + ' ms';
-    console.log('RTT ', rtt);
+// function addDataPoint(activeCandidatePair) {
+//   if (activeCandidatePair) {
+//     const rtt = Math.floor(activeCandidatePair.currentRoundTripTime * 1000) + ' ms';
+//     console.log('RTT ', rtt);
 
-    dataPoints.push({
-      rtt: activeCandidatePair.currentRoundTripTime,
-      bandwidth: rtt, // Adjust based on your actual bandwidth calculation
-      bytesSent: activeCandidatePair.bytesSent,
-      bytesReceived: activeCandidatePair.bytesReceived
-    });
+//     dataPoints.push({
+//       rtt: activeCandidatePair.currentRoundTripTime,
+//       bandwidth: rtt, // Adjust based on your actual bandwidth calculation
+//       bytesSent: activeCandidatePair.bytesSent,
+//       bytesReceived: activeCandidatePair.bytesReceived
+//     });
 
-    console.log('dataPoints ', dataPoints);
+//     console.log('dataPoints ', dataPoints);
+//   }
+
+// }
+// ONNX Model loading
+async function loadONNXModel() {
+  try {
+    session = new onnx.InferenceSession();
+    await session.loadModel('model/my_modela.onnx');
+    console.log('ONNX model loaded successfully');
+  } catch (error) {
+    console.error('Failed to load the ONNX model:', error);
   }
+}
+loadONNXModel();
 
+// Function to predict bandwidth using collected data points
+async function predictWithModel(dataPoints) {
+  if (!session) {
+    console.log('ONNX session is not ready.');
+    return;
+  }
+  console.log('Predicting bandwidth with data:', dataPoints);
+  const inputTensor = new onnx.Tensor(new Float32Array(dataPoints), 'float32', [1, 4]);
+  try {
+    const outputs = await session.run({ input: inputTensor });
+    const outputTensor = outputs.output; // Adjust this key based on your model's output key
+    console.log('Predicted Value:', outputTensor.data);
+    return outputTensor.data;
+  } catch (error) {
+    console.error('Error during model prediction:', error);
+  }
 }
 
+// Collect data points and trigger prediction
+function addDataPoint(rtt,fin) {
+  const rttFloat = parseFloat(rtt);
+  dataPoints.push(rttFloat);
+  if (dataPoints.length === 4) { // Check if we have four data points
+    console.log("$$$$$$$$$$$$$$$$$$$$")
+    predictWithModel(dataPoints).then((predictedValue) => {
+      console.log('Prediction:', predictedValue);
+      console.log('Prediction:', fin);
+    });
+    dataPoints = []; // Clear the array after prediction
+  }
+}
 
-// Monitor real-time bandwidth
-pc.onconnectionstatechange = event => {
+let fin;
+// Monitor connection state and collect RTT data
+pc.onconnectionstatechange = async (event) => {
   if (pc.connectionState === 'connected') {
     setInterval(async () => {
       const stats = await pc.getStats();
-      let activeCandidatePair;
       stats.forEach(report => {
         if (report.type === 'transport') {
-          activeCandidatePair = stats.get(report.selectedCandidatePairId);
+          const activeCandidatePair = stats.get(report.selectedCandidatePairId);
+          if (activeCandidatePair && activeCandidatePair.currentRoundTripTime) {
+            const rtt = (activeCandidatePair.currentRoundTripTime * 1000).toFixed(2);
+            fin = (activeCandidatePair.currentRoundTripTime).toFixed(2);
+            console.log('RTT:', rtt, 'ms');
+            addDataPoint(rtt,fin); // Add RTT to the data points array
+            console.log(fin,"*&^%$#%&^%$#%^&%$")
+
+
+          }
         }
       });
-
-      if (activeCandidatePair) {
-        // Calcula te RTT in milliseconds
-        const rtt = Math.floor(activeCandidatePair.currentRoundTripTime * 1000) + ' ms';
-        // console.log('RTT ', rtt);
-
-        // Extract bytesSent and bytesReceived from the activeCandidatePair
-        const bytesSent = activeCandidatePair.bytesSent;
-        const bytesReceived = activeCandidatePair.bytesReceived;
-
-        // Add the RTT, bytesSent, and bytesReceived to the dataPoints array
-        dataPoints.push({
-          rtt: activeCandidatePair.currentRoundTripTime,
-          bandwidth: rtt, // Assuming you want to keep using RTT for 'bandwidth'
-          bytesSent: bytesSent,
-          bytesReceived: bytesReceived
-        });
-
-
-        console.log('dataPoints $$ ', dataPoints);
-
-
-      }
-    }, 1000);
+    }, 1000); // Poll every second
   }
 };
 
-function logBandwidthData(pc) {
-
-  // This function retrieves stats and logs bandwidth data
-  setInterval(async () => {
-    const stats = await pc.getStats();
-    let activeCandidatePair;
-
-
-    stats.forEach(report => {
-      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-        activeCandidatePair = report;
-        console.log("hii")
-      }
-    });
-
-    if (activeCandidatePair && activeCandidatePair.currentRoundTripTime) {
-      const rtt = (activeCandidatePair.currentRoundTripTime * 1000).toFixed(2) + ' ms';
-      const bytesSentSinceLastInterval = activeCandidatePair.bytesSent;
-      const bytesReceivedSinceLastInterval = activeCandidatePair.bytesReceived;
-
-      console.log('Current RTT:', rtt);
-      console.log('Bytes Sent Since Last Interval:', bytesSentSinceLastInterval);
-      console.log('Bytes Received Since Last Interval:', bytesReceivedSinceLastInterval);
-
-      // Store or process your bandwidth data here as needed
-    }
-  }, 1000); // Poll every second
-}
-
-// Call this function after establishing the peer connection
-logBandwidthData(pc);
-
-
+console.log(fin,"*&^%$#%&^%$#%^&%$")
