@@ -13,7 +13,7 @@ import {
   setDoc,
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
-import { InferenceSession, Tensor } from 'onnxjs';
+// import { InferenceSession, Tensor } from 'onnxjs';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -46,11 +46,15 @@ let model;
 
 async function loadSuperResolutionModel() {
   console.log('Loading the model...');
-  model = await tf.loadGraphModel('model/model.json');
+  model = await tf.loadGraphModel('/model.json');
   console.log('Model loaded successfully.');
 }
 
-loadSuperResolutionModel();
+tf.setBackend('webgl').then(() => {
+  console.log('Using WebGL Backend:', tf.getBackend());
+  // Now you can run your model and the operations will be executed on the GPU.
+  loadSuperResolutionModel();
+});
 
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
@@ -60,93 +64,52 @@ const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
 
+const canvas = document.createElement('canvas');
+const worker = new Worker('worker.js');
+worker.postMessage({ type: 'loadModel', modelUrl: '/model.json' });
+
+worker.addEventListener('message', (event) => {
+  if (event.data.type === 'modelLoaded') {
+    console.log('Model loaded in worker');
+  } else if (event.data.type === 'frameEnhanced') {
+    const { outputTensor } = event.data;
+    // Render the output tensor to the canvas
+    tf.browser.toPixels(outputTensor, canvas);
+    // Update the video track in the existing remoteStream
+    const [videoTrack] = remoteStream.getVideoTracks();
+    videoTrack.replaceTrack(canvas.captureStream().getVideoTracks()[0]);
+    // Dispose of the tensor
+    outputTensor.dispose();
+    console.log('Frame enhancement completed and rendered');
+  }
+});
+
 async function enhanceVideoFrame() {
-  if (!model || !remoteVideo || remoteVideo.readyState < 2) {
-    console.log('Model not loaded or video not ready');
+  if (!remoteVideo || remoteVideo.readyState < 2) {
+    console.error('Video not ready');
     return;
   }
 
   if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
-    console.log('Video dimensions not ready');
+    console.error('Video dimensions not available');
     return;
   }
 
-  console.log('Starting video frame enhancement');
-  tf.engine().startScope();
-
-  const canvas = document.createElement('canvas');
   canvas.width = remoteVideo.videoWidth;
   canvas.height = remoteVideo.videoHeight;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
 
   const tensor = tf.browser.fromPixels(canvas).toFloat().div(tf.scalar(255.0));
-  console.log('Initial tensor shape:', tensor.shape);
-
-  let [R, G, B] = tf.split(tensor, 3, 2);
-  let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
-  let Cr = R.sub(Y).mul(0.713).add(0.5);
-  let Cb = B.sub(Y).mul(0.564).add(0.5);
-  console.log('Y channel shape:', Y.shape);
-  console.log('Cr channel shape:', Cr.shape);
-  console.log('Cb channel shape:', Cb.shape);
-
-  Y = Y.expandDims(0);
-  Y = tf.image.resizeBilinear(Y, [240, 480]);
-  Y = Y.transpose([0, 3, 1, 2]);
-  console.log('Y channel shape after resize and transpose:', Y.shape);
-
-  const outputTensor = await model.predict(Y);
-  console.log('Output tensor shape:', outputTensor.shape);
-
-  Cr = Cr.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
-  Cb = Cb.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
-  console.log('Upscaled Cr shape:', Cr.shape);
-  console.log('Upscaled Cb shape:', Cb.shape);
-
-  let YCrCbUpscaled = tf.concat([outputTensor, Cr, Cb], 1);
-  console.log('Merged YCrCb tensor shape:', YCrCbUpscaled.shape);
-
-  const RGBUpscaled = tf.tidy(() => {
-    const Y = YCrCbUpscaled.slice([0, 0, 0, 0], [-1, 1, -1, -1]).squeeze();
-    const Cr = YCrCbUpscaled.slice([0, 1, 0, 0], [-1, 1, -1, -1]).squeeze();
-    const Cb = YCrCbUpscaled.slice([0, 2, 0, 0], [-1, 1, -1, -1]).squeeze();
-
-    const R = Y.add(Cr.sub(0.5).mul(1.403));
-    const G = Y.sub(Cr.sub(0.5).mul(0.344)).sub(Cb.sub(0.5).mul(0.714));
-    const B = Y.add(Cb.sub(0.5).mul(1.773));
-    return tf.stack([R, G, B], 2).clipByValue(0, 1);
+  // Send tensor data and shape
+  worker.postMessage({
+    type: 'enhanceFrame',
+    tensor: { data: tensor.dataSync(), shape: tensor.shape }
   });
-  console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
-
-  await tf.browser.toPixels(RGBUpscaled, canvas);
-  console.log('Rendered to canvas');
-
-  const enhancedStream = canvas.captureStream();
-  const [videoTrack] = enhancedStream.getVideoTracks();
-  remoteVideo.srcObject = new MediaStream([videoTrack]);
-
   tensor.dispose();
-  R.dispose();
-  G.dispose();
-  B.dispose();
-  Y.dispose();
-  Cr.dispose();
-  Cb.dispose();
-  outputTensor.dispose();
-  YCrCbUpscaled.dispose();
-  RGBUpscaled.dispose();
-  tf.engine().endScope();
-  console.log('Enhancement complete and tensors disposed');
 }
 
-
 setInterval(enhanceVideoFrame, 1000); // Running at 10 FPS for performance reasons
-
-
-
-
-
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({
