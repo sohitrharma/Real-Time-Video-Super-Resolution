@@ -13,7 +13,6 @@ import {
   setDoc,
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
-import { InferenceSession, Tensor } from 'onnxjs';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -50,7 +49,11 @@ async function loadSuperResolutionModel() {
   console.log('Model loaded successfully.');
 }
 
-loadSuperResolutionModel();
+tf.setBackend('webgl').then(() => {
+  console.log('Using WebGL Backend:', tf.getBackend());
+  // Now you can run your model and the operations will be executed on the GPU.
+  loadSuperResolutionModel();
+});
 
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
@@ -59,13 +62,14 @@ const callInput = document.getElementById('callInput');
 const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
+const processedVideoCanvas = document.getElementById('processedVideoCanvas');
+const ctx = processedVideoCanvas.getContext('2d');
 
 async function enhanceVideoFrame() {
   if (!model || !remoteVideo || remoteVideo.readyState < 2) {
     console.log('Model not loaded or video not ready');
     return;
   }
-
   if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
     console.log('Video dimensions not ready');
     return;
@@ -77,8 +81,8 @@ async function enhanceVideoFrame() {
   const canvas = document.createElement('canvas');
   canvas.width = remoteVideo.videoWidth;
   canvas.height = remoteVideo.videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+  const tempCtx = canvas.getContext('2d');
+  tempCtx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
 
   const tensor = tf.browser.fromPixels(canvas).toFloat().div(tf.scalar(255.0));
   console.log('Initial tensor shape:', tensor.shape);
@@ -87,26 +91,16 @@ async function enhanceVideoFrame() {
   let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
   let Cr = R.sub(Y).mul(0.713).add(0.5);
   let Cb = B.sub(Y).mul(0.564).add(0.5);
-  console.log('Y channel shape:', Y.shape);
-  console.log('Cr channel shape:', Cr.shape);
-  console.log('Cb channel shape:', Cb.shape);
 
   Y = Y.expandDims(0);
   Y = tf.image.resizeBilinear(Y, [240, 480]);
   Y = Y.transpose([0, 3, 1, 2]);
-  console.log('Y channel shape after resize and transpose:', Y.shape);
-
   const outputTensor = await model.predict(Y);
-  console.log('Output tensor shape:', outputTensor.shape);
 
   Cr = Cr.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
   Cb = Cb.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
-  console.log('Upscaled Cr shape:', Cr.shape);
-  console.log('Upscaled Cb shape:', Cb.shape);
 
   let YCrCbUpscaled = tf.concat([outputTensor, Cr, Cb], 1);
-  console.log('Merged YCrCb tensor shape:', YCrCbUpscaled.shape);
-
   const RGBUpscaled = tf.tidy(() => {
     const Y = YCrCbUpscaled.slice([0, 0, 0, 0], [-1, 1, -1, -1]).squeeze();
     const Cr = YCrCbUpscaled.slice([0, 1, 0, 0], [-1, 1, -1, -1]).squeeze();
@@ -117,15 +111,12 @@ async function enhanceVideoFrame() {
     const B = Y.add(Cb.sub(0.5).mul(1.773));
     return tf.stack([R, G, B], 2).clipByValue(0, 1);
   });
+
   console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
 
-  await tf.browser.toPixels(RGBUpscaled, canvas);
-  console.log('Rendered to canvas');
+  await tf.browser.toPixels(RGBUpscaled, processedVideoCanvas); // Render onto the visible canvas instead of the hidden video
 
-  const enhancedStream = canvas.captureStream();
-  const [videoTrack] = enhancedStream.getVideoTracks();
-  remoteVideo.srcObject = new MediaStream([videoTrack]);
-
+  // Dispose of tensors
   tensor.dispose();
   R.dispose();
   G.dispose();
@@ -140,13 +131,7 @@ async function enhanceVideoFrame() {
   console.log('Enhancement complete and tensors disposed');
 }
 
-
-setInterval(enhanceVideoFrame, 1000); // Running at 10 FPS for performance reasons
-
-
-
-
-
+setInterval(enhanceVideoFrame, 1000 / 30); // Adjusted FPS for smoother performance
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({

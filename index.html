@@ -6,40 +6,31 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Video Conferencing App</title>
-  <script src="/opencv.js" type="text/javascript"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-
   <div class="container">
     <h2>Video Conferencing</h2>
-
     <p>Please provide permission when prompted to access your camera and microphone. This will ensure the best video
       conferencing experience.</p>
-
     <div class="video-section">
       <video id="webcamVideo" muted autoplay playsinline></video>
-      <video id="remoteVideo" width="240" height="480" autoplay playsinline></video>
+      <video id="remoteVideo" style="display:none;" autoplay playsinline></video> <!-- Hidden video element -->
+      <canvas id="processedVideoCanvas" width="240" height="480"></canvas> <!-- Display processed frames here -->
     </div>
-
     <div class="controls">
       <button class="btn btn-primary" id="webcamButton">Start Webcam</button>
       <button class="btn btn-primary" id="callButton" disabled>Create Call</button>
-
       <label for="callInput">Enter Call ID to join an existing call or create a new call to get an ID:</label>
       <input type="text" id="callInput" placeholder="Enter Call ID">
-
       <button class="btn btn-primary" id="answerButton" disabled>Answer</button>
       <button class="btn btn-primary" id="hangupButton" disabled>Hangup</button>
     </div>
-
     <div id="errorMsg" class="error-message"></div> <!-- For displaying potential error messages -->
   </div>
-
   <script type="module" src="/main.js"></script>
-
 </body>
 
 </html>
