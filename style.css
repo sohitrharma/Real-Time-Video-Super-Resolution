@@ -54,3 +54,10 @@ video {
   justify-content: center;
   align-items: center;
 }
+
+#processedVideoCanvas {
+    width: 48%;  /* or any other fitting size */
+    height: 300px; /* maintain aspect ratio */
+    border-radius: 8px;
+  border: 1px solid #ddd;
+}

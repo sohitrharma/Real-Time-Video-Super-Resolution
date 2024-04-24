@@ -131,7 +131,7 @@ async function enhanceVideoFrame() {
   console.log('Enhancement complete and tensors disposed');
 }
 
-setInterval(enhanceVideoFrame, 1000 / 30); // Adjusted FPS for smoother performance
+let enhancementInterval = setInterval(enhanceVideoFrame, 1000 / 30); // Adjusted FPS for smoother performance
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -241,6 +241,9 @@ answerButton.addEventListener('click', async () => {
 });
 
 async function hangupCall() {
+  if (enhancementInterval) {
+    clearInterval(enhancementInterval); // This will stop the video frame enhancement
+  }
   pc.close();
   localStream.getTracks().forEach(track => track.stop());
   remoteStream.getTracks().forEach(track => track.stop());
