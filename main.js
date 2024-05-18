@@ -67,15 +67,13 @@ const ctx = processedVideoCanvas.getContext('2d');
 
 async function enhanceVideoFrame() {
   if (!model || !remoteVideo || remoteVideo.readyState < 2) {
-    console.log('Model not loaded or video not ready');
     return;
   }
   if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
-    console.log('Video dimensions not ready');
+    console.error('Video dimensions not ready');
     return;
   }
 
-  console.log('Starting video frame enhancement');
   tf.engine().startScope();
 
   const canvas = document.createElement('canvas');
@@ -85,7 +83,6 @@ async function enhanceVideoFrame() {
   tempCtx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
 
   const tensor = tf.browser.fromPixels(canvas).toFloat().div(tf.scalar(255.0));
-  console.log('Initial tensor shape:', tensor.shape);
 
   let [R, G, B] = tf.split(tensor, 3, 2);
   let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
@@ -112,8 +109,6 @@ async function enhanceVideoFrame() {
     return tf.stack([R, G, B], 2).clipByValue(0, 1);
   });
 
-  console.log('RGBUpscaled tensor shape:', RGBUpscaled.shape);
-
   await tf.browser.toPixels(RGBUpscaled, processedVideoCanvas); // Render onto the visible canvas instead of the hidden video
 
   // Dispose of tensors
@@ -128,10 +123,9 @@ async function enhanceVideoFrame() {
   YCrCbUpscaled.dispose();
   RGBUpscaled.dispose();
   tf.engine().endScope();
-  console.log('Enhancement complete and tensors disposed');
 }
 
-let enhancementInterval = setInterval(enhanceVideoFrame, 1000 / 30); // Adjusted FPS for smoother performance
+let enhancementInterval = setInterval(enhanceVideoFrame, 1000 / 24); // Adjusted FPS for smoother performance
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({

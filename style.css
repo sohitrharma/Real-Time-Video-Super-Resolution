@@ -1,12 +1,24 @@
 body {
   font-family: 'Arial', sans-serif;
-  background-color: #f4f4f4;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100vh;
+  background-color: #f5f5f5;
   margin: 0;
+  padding: 0;
+  color: #333;
 }
+
+h1 {
+  text-align: center;
+  margin-top: 20px;
+  margin-bottom: 20px;
+  color: #444;
+}
+
+p {
+  text-align: center;
+  margin-bottom: 10px;
+  color: #666;
+}
+
 
 .container {
   background-color: #fff;
@@ -34,6 +46,35 @@ button:hover {
 
 button:disabled {
   background-color: #c6c6c6;
+  cursor: not-allowed;
+}
+
+label {
+  color: #555;
+}
+
+input[type="text"],
+input[type="email"] {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  outline: none;
+  margin: 10px 0;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.top-buttons,
+.bottom-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
 }
 
 .video-section {
@@ -49,15 +90,11 @@ video {
   border: 1px solid #ddd;
 }
 
-.controls {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
 #processedVideoCanvas {
-    width: 48%;  /* or any other fitting size */
-    height: 300px; /* maintain aspect ratio */
-    border-radius: 8px;
+  width: 48%;
+  /* or any other fitting size */
+  height: 300px;
+  /* maintain aspect ratio */
+  border-radius: 8px;
   border: 1px solid #ddd;
 }

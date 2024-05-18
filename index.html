@@ -11,26 +11,82 @@
 </head>
 
 <body>
+  <script type="text/javascript" src="https://cdn.emailjs.com/dist/email.min.js"></script>
+  <script type="text/javascript">
+    (function () {
+      emailjs.init("qzDY1LQ_WS1fFmtIR");
+    })();
+
+
+    function sendEmail() {
+      const email = document.getElementById('emailInput').value.trim();
+      const callId = document.getElementById('callInput').value;
+
+      if (!email || !callId) {
+        alert('Please enter both an email address and a call ID.');
+        return;
+      }
+
+      if (!validateEmail(email)) {
+        alert('Please enter a valid email address.');
+        return;
+      }
+
+      const templateParams = {
+        user_email: email,
+        call_id: callId
+      };
+
+      emailjs.send('service_70zl44p', 'callID_243304u', templateParams)
+        .then(function (response) {
+          console.log('SUCCESS!', response.status, response.text);
+          alert('Email sent successfully!');
+          document.getElementById('emailInput').value = '';
+        }, function (error) {
+          console.log('FAILED...', error);
+          alert('Failed to send email: ' + JSON.stringify(error));
+        });
+    }
+
+    function validateEmail(email) {
+      const re = /\S+@\S+\.\S+/;
+      return re.test(String(email).toLowerCase());
+    }
+  </script>
+
+
+  <h1>Video Conferencing</h1>
+
+
+  <div class="controls">
+    <div class="top-buttons">
+      <button class="btn btn-primary" id="webcamButton">Start Webcam</button>
+      <button class="btn btn-primary" id="callButton" disabled>Create Call</button>
+    </div>
+
+    <label for="callInput">Enter Call ID to join an existing call or create a new call to get an ID:</label>
+    <input type="text" id="callInput" placeholder="Enter Call ID">
+    <div class="bottom-buttons">
+      <button class="btn btn-primary" id="answerButton" disabled>Answer</button>
+      <button class="btn btn-primary" id="hangupButton" disabled>Hangup</button>
+    </div>
+    <input type="email" placeholder="Enter Email Address here" id="emailInput">
+    <button class="btn btn-primary" id="sendButton" onclick="sendEmail();">Send Email</button>
+  </div>
+
   <div class="container">
-    <h2>Video Conferencing</h2>
-    <p>Please provide permission when prompted to access your camera and microphone. This will ensure the best video
-      conferencing experience.</p>
+
     <div class="video-section">
       <video id="webcamVideo" muted autoplay playsinline></video>
       <video id="remoteVideo" style="display:none;" autoplay playsinline></video> <!-- Hidden video element -->
       <canvas id="processedVideoCanvas" width="240" height="480"></canvas> <!-- Display processed frames here -->
     </div>
-    <div class="controls">
-      <button class="btn btn-primary" id="webcamButton">Start Webcam</button>
-      <button class="btn btn-primary" id="callButton" disabled>Create Call</button>
-      <label for="callInput">Enter Call ID to join an existing call or create a new call to get an ID:</label>
-      <input type="text" id="callInput" placeholder="Enter Call ID">
-      <button class="btn btn-primary" id="answerButton" disabled>Answer</button>
-      <button class="btn btn-primary" id="hangupButton" disabled>Hangup</button>
-    </div>
+
     <div id="errorMsg" class="error-message"></div> <!-- For displaying potential error messages -->
   </div>
+
   <script type="module" src="/main.js"></script>
+
 </body>
 
 </html>
