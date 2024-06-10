@@ -11,6 +11,10 @@
   },
   "dependencies": {
     "bootstrap": "^5.3.2",
-    "firebase": "^9.0.0"
+    "firebase": "^9.0.0",
+    "onnxjs": "^0.1.8",
+    "onnxruntime-web": "^1.17.3",
+    "opencv.js": "^1.2.1",
+    "opencvjs": "^1.0.1"
   }
 }

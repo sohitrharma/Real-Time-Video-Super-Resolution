@@ -14,11 +14,7 @@ import {
   updateDoc
 } from 'https://www.gstatic.com/firebasejs/9.4.0/firebase-firestore.js';
 
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
 // Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyD_F2QU9kOyUxt83o7ntZiWNVkyFdJDjbM",
   authDomain: "webrtc-video-conferencin-a2abe.firebaseapp.com",
@@ -29,25 +25,35 @@ const firebaseConfig = {
   measurementId: "G-F55B7DMZK6"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const firestore = getFirestore(app);
 const callsCollection = collection(firestore, 'calls');
 
 const servers = {
   iceServers: [
-    {
-      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
-    },
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
   ],
   iceCandidatePoolSize: 10,
   sctp: true,
 };
 
-// Global State
 let pc = new RTCPeerConnection(servers);
 let localStream = null;
 let remoteStream = null;
+
+let model;
+
+async function loadSuperResolutionModel() {
+  console.log('Loading the model...');
+  model = await tf.loadGraphModel('model/model.json');
+  console.log('Model loaded successfully.');
+}
+
+tf.setBackend('webgl').then(() => {
+  console.log('Using WebGL Backend:', tf.getBackend());
+  // Now you can run your model and the operations will be executed on the GPU.
+  loadSuperResolutionModel();
+});
 
 const webcamButton = document.getElementById('webcamButton');
 const webcamVideo = document.getElementById('webcamVideo');
@@ -56,6 +62,70 @@ const callInput = document.getElementById('callInput');
 const answerButton = document.getElementById('answerButton');
 const remoteVideo = document.getElementById('remoteVideo');
 const hangupButton = document.getElementById('hangupButton');
+const processedVideoCanvas = document.getElementById('processedVideoCanvas');
+const ctx = processedVideoCanvas.getContext('2d');
+
+async function enhanceVideoFrame() {
+  if (!model || !remoteVideo || remoteVideo.readyState < 2) {
+    return;
+  }
+  if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
+    console.error('Video dimensions not ready');
+    return;
+  }
+
+  tf.engine().startScope();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = remoteVideo.videoWidth;
+  canvas.height = remoteVideo.videoHeight;
+  const tempCtx = canvas.getContext('2d');
+  tempCtx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+
+  const tensor = tf.browser.fromPixels(canvas).toFloat().div(tf.scalar(255.0));
+
+  let [R, G, B] = tf.split(tensor, 3, 2);
+  let Y = R.mul(0.299).add(G.mul(0.587)).add(B.mul(0.114));
+  let Cr = R.sub(Y).mul(0.713).add(0.5);
+  let Cb = B.sub(Y).mul(0.564).add(0.5);
+
+  Y = Y.expandDims(0);
+  Y = tf.image.resizeBilinear(Y, [240, 480]);
+  Y = Y.transpose([0, 3, 1, 2]);
+  const outputTensor = await model.predict(Y);
+
+  Cr = Cr.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
+  Cb = Cb.resizeBilinear([outputTensor.shape[2], outputTensor.shape[3]]).expandDims(0).transpose([0, 3, 1, 2]);
+
+  let YCrCbUpscaled = tf.concat([outputTensor, Cr, Cb], 1);
+  const RGBUpscaled = tf.tidy(() => {
+    const Y = YCrCbUpscaled.slice([0, 0, 0, 0], [-1, 1, -1, -1]).squeeze();
+    const Cr = YCrCbUpscaled.slice([0, 1, 0, 0], [-1, 1, -1, -1]).squeeze();
+    const Cb = YCrCbUpscaled.slice([0, 2, 0, 0], [-1, 1, -1, -1]).squeeze();
+
+    const R = Y.add(Cr.sub(0.5).mul(1.403));
+    const G = Y.sub(Cr.sub(0.5).mul(0.344)).sub(Cb.sub(0.5).mul(0.714));
+    const B = Y.add(Cb.sub(0.5).mul(1.773));
+    return tf.stack([R, G, B], 2).clipByValue(0, 1);
+  });
+
+  await tf.browser.toPixels(RGBUpscaled, processedVideoCanvas); // Render onto the visible canvas instead of the hidden video
+
+  // Dispose of tensors
+  tensor.dispose();
+  R.dispose();
+  G.dispose();
+  B.dispose();
+  Y.dispose();
+  Cr.dispose();
+  Cb.dispose();
+  outputTensor.dispose();
+  YCrCbUpscaled.dispose();
+  RGBUpscaled.dispose();
+  tf.engine().endScope();
+}
+
+let enhancementInterval = setInterval(enhanceVideoFrame, 1000 / 24); // Adjusted FPS for smoother performance
 
 webcamButton.addEventListener('click', async () => {
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -83,12 +153,10 @@ webcamButton.addEventListener('click', async () => {
   webcamVideo.srcObject = localStream;
   remoteVideo.srcObject = remoteStream;
 
-  // Enable/disable respective buttons
   callButton.disabled = false;
   answerButton.disabled = false;
   webcamButton.disabled = true;
 });
-
 callButton.addEventListener('click', async () => {
   const callDoc = doc(callsCollection);
   const offerCandidates = collection(callDoc, 'offerCandidates');
@@ -96,26 +164,31 @@ callButton.addEventListener('click', async () => {
 
   callInput.value = callDoc.id;
 
-  pc.onicecandidate = async (event) => {
-    event.candidate && await addDoc(offerCandidates, event.candidate.toJSON());
+  pc.onicecandidate = event => {
+    if (event.candidate) {
+      addDoc(offerCandidates, event.candidate.toJSON());
+    }
   };
 
   const offerDescription = await pc.createOffer();
   await pc.setLocalDescription(offerDescription);
+
   const offer = {
     sdp: offerDescription.sdp,
     type: offerDescription.type,
   };
   await setDoc(callDoc, { offer });
-  onSnapshot(doc(firestore, 'calls', callDoc.id), (snapshot) => {
+
+  onSnapshot(doc(firestore, 'calls', callDoc.id), snapshot => {
     const data = snapshot.data();
     if (!pc.currentRemoteDescription && data?.answer) {
       const answerDescription = new RTCSessionDescription(data.answer);
       pc.setRemoteDescription(answerDescription);
     }
   });
-  onSnapshot(collection(doc(firestore, 'calls', callDoc.id), 'answerCandidates'), (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
+
+  onSnapshot(collection(doc(firestore, 'calls', callDoc.id), 'answerCandidates'), snapshot => {
+    snapshot.docChanges().forEach(change => {
       if (change.type === 'added') {
         const candidate = new RTCIceCandidate(change.doc.data());
         pc.addIceCandidate(candidate);
@@ -132,23 +205,29 @@ answerButton.addEventListener('click', async () => {
   const answerCandidates = collection(callDoc, 'answerCandidates');
   const offerCandidates = collection(callDoc, 'offerCandidates');
 
-  pc.onicecandidate = async (event) => {
-    event.candidate && await addDoc(answerCandidates, event.candidate.toJSON());
+  pc.onicecandidate = event => {
+    if (event.candidate) {
+      addDoc(answerCandidates, event.candidate.toJSON());
+    }
   };
+
   const callData = (await getDoc(callDoc)).data();
   const offerDescription = callData.offer;
   await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
+
   const answerDescription = await pc.createAnswer();
   await pc.setLocalDescription(answerDescription);
+
   const answer = {
     type: answerDescription.type,
     sdp: answerDescription.sdp,
   };
   await updateDoc(callDoc, { answer });
-  onSnapshot(collection(callDoc, 'offerCandidates'), (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
+
+  onSnapshot(collection(callDoc, 'offerCandidates'), snapshot => {
+    snapshot.docChanges().forEach(change => {
       if (change.type === 'added') {
-        let data = change.doc.data();
+        const data = change.doc.data();
         pc.addIceCandidate(new RTCIceCandidate(data));
       }
     });
@@ -156,6 +235,9 @@ answerButton.addEventListener('click', async () => {
 });
 
 async function hangupCall() {
+  if (enhancementInterval) {
+    clearInterval(enhancementInterval); // This will stop the video frame enhancement
+  }
   pc.close();
   localStream.getTracks().forEach(track => track.stop());
   remoteStream.getTracks().forEach(track => track.stop());
@@ -163,24 +245,21 @@ async function hangupCall() {
   const callDoc = doc(callsCollection, callId);
   await updateDoc(callDoc, { callEnded: true });
 
-  // Reset the UI state
   hangupButton.disabled = true;
   callButton.disabled = false;
   answerButton.disabled = false;
   webcamButton.disabled = false;
   callInput.value = '';
 
-  // Gracefully reset the peer connection
   pc = new RTCPeerConnection(servers);
 }
 
 hangupButton.addEventListener('click', hangupCall);
 
-// Listen for Call Termination on both sides (caller and recipient)
 function monitorCallEnd() {
   const callId = callInput.value;
   const callDoc = doc(callsCollection, callId);
-  onSnapshot(callDoc, (snapshot) => {
+  onSnapshot(callDoc, snapshot => {
     const data = snapshot.data();
     if (data?.callEnded) {
       hangupCall();
@@ -188,6 +267,5 @@ function monitorCallEnd() {
   });
 }
 
-// Add call monitoring immediately after setting up the call or answering
 callButton.addEventListener('click', monitorCallEnd);
 answerButton.addEventListener('click', monitorCallEnd);
