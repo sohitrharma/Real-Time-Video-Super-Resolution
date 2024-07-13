@@ -88,5 +88,3 @@ Rohit Sharma
 - [Firebase](https://firebase.google.com/)
 - [TensorFlow.js](https://www.tensorflow.org/js)
 - [EmailJS](https://www.emailjs.com/)
-
-6. Run the development server:
