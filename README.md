@@ -79,7 +79,7 @@ This project is [MIT](https://choosealicense.com/licenses/mit/) licensed.
 ## 👤 Author
 
 Rohit Sharma
-- GitHub: [@your-github-username](https://github.com/sohitrharma)
+- GitHub: [@sohitrharma](https://github.com/sohitrharma)
 - LinkedIn: [Your LinkedIn](https://linkedin.com/in/rohitsanjaysharma)
 
 ## 🙏 Acknowledgements
