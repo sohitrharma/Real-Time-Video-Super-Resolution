@@ -80,7 +80,7 @@ This project is [MIT](https://choosealicense.com/licenses/mit/) licensed.
 
 Rohit Sharma
 - GitHub: [@sohitrharma](https://github.com/sohitrharma)
-- LinkedIn: [Your LinkedIn](https://linkedin.com/in/rohitsanjaysharma)
+- LinkedIn: [@rohitsanjaysharma](https://linkedin.com/in/rohitsanjaysharma)
 
 ## 🙏 Acknowledgements
 
